@@ -1,0 +1,11 @@
+[package]
+name = "hyper-tokio-benchmark"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hyper = { version = "1.4.1", features = ["full"] }
+tokio = { version = "1.40.0", features = ["full"] }
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["full"] }
+tokio-metrics = "0.3.1"
