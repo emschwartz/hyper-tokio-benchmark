@@ -1,15 +1,13 @@
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Empty, Full};
-use hyper::body::{Body, Bytes, Frame};
+use hyper::body::{Bytes, Frame};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
-use std::sync::RwLock;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio_metrics::RuntimeMetrics;
 
 /// This is our service handler. It receives a Request, routes on its
 /// path, and returns a Future of a Response.
@@ -85,16 +83,24 @@ fn full<T: Into<Bytes>>(chunk: T) -> BoxBody<Bytes, hyper::Error> {
 
 #[derive(Debug, Default)]
 struct Metrics {
-    total_steal_operations: u64,
-    total_steal_count: u64,
-    max_steal_operations: u64,
-    max_steal_count: u64,
-    num_remote_schedules: u64,
-    total_local_schedule_count: u64,
+    num_alive_tasks: u64,
+    spawned_tasks_count: u64,
+    worker_metrics: Vec<WorkerMetrics>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct WorkerMetrics {
+    local_queue_depth: u64,
+    local_schedule_count: u64,
+    mean_poll_time: Duration,
+    noop_count: u64,
+    overflow_count: u64,
+    park_count: u64,
+    park_unpark_count: u64,
+    poll_count: u64,
+    steal_count: u64,
+    steal_operations: u64,
     total_busy_duration: Duration,
-    total_polls_count: u64,
-    total_park_count: u64,
-    total_overflow_count: u64,
 }
 
 #[tokio::main]
@@ -102,25 +108,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
     let handle = tokio::runtime::Handle::current();
-    let runtime_monitor = tokio_metrics::RuntimeMonitor::new(&handle);
+    let num_workers = handle.metrics().num_workers();
 
     {
         tokio::spawn(async move {
-            let mut metrics = Metrics::default();
+            let mut metrics = Metrics {
+                worker_metrics: vec![WorkerMetrics::default(); num_workers as usize],
+                ..Metrics::default()
+            };
 
-            for interval in runtime_monitor.intervals() {
-                metrics.total_steal_operations += interval.total_steal_operations;
-                metrics.total_steal_count += interval.total_steal_count;
-                metrics.max_steal_operations = metrics
-                    .max_steal_operations
-                    .max(interval.max_steal_operations);
-                metrics.max_steal_count = metrics.max_steal_count.max(interval.max_steal_count);
-                metrics.num_remote_schedules += interval.num_remote_schedules;
-                metrics.total_local_schedule_count += interval.total_local_schedule_count;
-                metrics.total_busy_duration += interval.total_busy_duration;
-                metrics.total_polls_count += interval.total_polls_count;
-                metrics.total_park_count += interval.total_park_count;
-                metrics.total_overflow_count += interval.total_overflow_count;
+            loop {
+                let runtime_metrics = handle.metrics();
+                metrics.num_alive_tasks = runtime_metrics.num_alive_tasks() as u64;
+                metrics.spawned_tasks_count = runtime_metrics.spawned_tasks_count();
+                for worker in 0..num_workers {
+                    metrics.worker_metrics[worker].local_queue_depth =
+                        runtime_metrics.worker_local_queue_depth(worker) as u64;
+                    metrics.worker_metrics[worker].local_schedule_count =
+                        runtime_metrics.worker_local_schedule_count(worker) as u64;
+                    metrics.worker_metrics[worker].mean_poll_time =
+                        runtime_metrics.worker_mean_poll_time(worker);
+                    metrics.worker_metrics[worker].noop_count =
+                        runtime_metrics.worker_noop_count(worker) as u64;
+                    metrics.worker_metrics[worker].overflow_count =
+                        runtime_metrics.worker_overflow_count(worker) as u64;
+                    metrics.worker_metrics[worker].park_count =
+                        runtime_metrics.worker_park_count(worker) as u64;
+                    metrics.worker_metrics[worker].park_unpark_count =
+                        runtime_metrics.worker_park_unpark_count(worker) as u64;
+                    metrics.worker_metrics[worker].poll_count =
+                        runtime_metrics.worker_poll_count(worker) as u64;
+                    metrics.worker_metrics[worker].steal_count =
+                        runtime_metrics.worker_steal_count(worker) as u64;
+                    metrics.worker_metrics[worker].steal_operations =
+                        runtime_metrics.worker_steal_operations(worker) as u64;
+                    metrics.worker_metrics[worker].total_busy_duration =
+                        runtime_metrics.worker_total_busy_duration(worker);
+                }
 
                 println!("{:?}", metrics);
                 // wait 500ms
