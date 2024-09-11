@@ -6,7 +6,6 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde::Serialize;
-use std::fs;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
@@ -160,7 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
             writer.flush().unwrap();
 
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(Duration::from_millis(10));
         }
     });
 
