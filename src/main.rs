@@ -107,12 +107,16 @@ struct WorkerMetrics {
     total_busy_duration_micros: u128,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
-    let handle = tokio::runtime::Handle::current();
-    let num_workers = handle.metrics().num_workers();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let runtime_metrics = runtime.metrics();
+    let num_workers = runtime_metrics.num_workers();
 
     // Spawn a separate thread to collect metrics and write them to a CSV file
     std::thread::spawn(move || {
@@ -126,7 +130,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
         loop {
             let elapsed_time_micros = start.elapsed().as_micros();
-            let runtime_metrics = handle.metrics();
             metrics.num_alive_tasks = runtime_metrics.num_alive_tasks() as u64;
             metrics.spawned_tasks_count = runtime_metrics.spawned_tasks_count();
             for worker in 0..num_workers {
@@ -163,21 +166,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     });
 
-    let listener = TcpListener::bind(addr).await?;
-    println!("Listening on http://{}", addr);
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let io = TokioIo::new(stream);
+    runtime.block_on(async {
+        let listener = TcpListener::bind(addr).await?;
+        println!("Listening on http://{}", addr);
+        loop {
+            let (stream, _) = listener.accept().await?;
+            let io = TokioIo::new(stream);
 
-        tokio::task::spawn(async move {
-            if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service_fn(echo))
-                .await
-            {
-                println!("Error serving connection: {:?}", err);
-            }
-        });
-    }
+            tokio::task::spawn(async move {
+                if let Err(err) = http1::Builder::new()
+                    .serve_connection(io, service_fn(echo))
+                    .await
+                {
+                    println!("Error serving connection: {:?}", err);
+                }
+            });
+        }
+    })
 }
 
 fn get_available_filename(base_name: &str, extension: &str) -> String {
