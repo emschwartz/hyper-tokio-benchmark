@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Thread Metrics Over Time</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        #controls {
+            margin-bottom: 20px;
+        }
+        #chartContainer {
+            flex-grow: 1;
+            width: 100%;
+            height: calc(100vh - 150px);
+            min-height: 400px;
+        }
+        #metricSelect, #displayModeToggle {
+            margin-top: 10px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Thread Metrics Over Time</h1>
+    <div id="controls">
+        <input type="file" id="csvFile" accept=".csv">
+        <button onclick="processFile()">Process CSV</button>
+        <br>
+        <select id="metricSelect" onchange="updateChart()" disabled>
+            <option value="">Select a metric</option>
+        </select>
+        <br>
+        <label for="displayModeToggle">
+            <input type="checkbox" id="displayModeToggle" onchange="updateChart()" disabled>
+            Show delta (change) instead of absolute values
+        </label>
+    </div>
+    <div id="chartContainer">
+        <canvas id="myChart"></canvas>
+    </div>
+
+    <script>
+        let myChart = null;
+        let processedData = null;
+        let availableMetrics = [];
+
+        function processFile() {
+            const fileInput = document.getElementById('csvFile');
+            const file = fileInput.files[0];
+            
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const csvData = e.target.result;
+                    processedData = processData(csvData);
+                    populateMetricSelect();
+                    document.getElementById('metricSelect').disabled = false;
+                    document.getElementById('displayModeToggle').disabled = false;
+                };
+                reader.readAsText(file);
+            } else {
+                alert('Please select a CSV file.');
+            }
+        }
+
+        function processData(csvData) {
+            const lines = csvData.trim().split('\n');
+            const headers = lines[0].split(',');
+            const threadIndex = headers.indexOf('thread_id');
+            const timeIndex = headers.indexOf('elapsed_time_micros');
+
+            availableMetrics = headers.filter(header => 
+                header !== 'thread_id' && header !== 'elapsed_time_micros');
+
+            const dataMap = new Map();
+
+            lines.slice(1).forEach(line => {
+                const values = line.split(',');
+                const time = parseInt(values[timeIndex]);
+                const threadId = parseInt(values[threadIndex]);
+
+                if (!dataMap.has(time)) {
+                    dataMap.set(time, { elapsed_time_micros: time });
+                }
+                const entry = dataMap.get(time);
+
+                headers.forEach((header, index) => {
+                    if (header !== 'thread_id' && header !== 'elapsed_time_micros') {
+                        if (!entry[header]) {
+                            entry[header] = {};
+                        }
+                        entry[header][`thread_${threadId}`] = parseFloat(values[index]);
+                    }
+                });
+            });
+
+            return Array.from(dataMap.values());
+        }
+
+        function populateMetricSelect() {
+            const select = document.getElementById('metricSelect');
+            select.innerHTML = '<option value="">Select a metric</option>';
+            availableMetrics.forEach(metric => {
+                const option = document.createElement('option');
+                option.value = metric;
+                option.textContent = metric;
+                select.appendChild(option);
+            });
+        }
+
+        function updateChart() {
+            const selectedMetric = document.getElementById('metricSelect').value;
+            const showDelta = document.getElementById('displayModeToggle').checked;
+            if (selectedMetric && processedData) {
+                createChart(processedData, selectedMetric, showDelta);
+            }
+        }
+
+        function createChart(data, metric, showDelta) {
+            const ctx = document.getElementById('myChart');
+            
+            if (myChart) {
+                myChart.destroy();
+            }
+
+            const datasets = Array.from({ length: 12 }, (_, i) => {
+                const threadData = data.map((entry, index) => {
+                    const value = entry[metric][`thread_${i}`] || 0;
+                    if (showDelta && index > 0) {
+                        const prevValue = data[index - 1][metric][`thread_${i}`] || 0;
+                        return { 
+                            x: entry.elapsed_time_micros / 1000000,
+                            y: value - prevValue
+                        };
+                    }
+                    return { 
+                        x: entry.elapsed_time_micros / 1000000,
+                        y: value
+                    };
+                });
+
+                // Remove the first point if showing delta
+                if (showDelta) {
+                    threadData.shift();
+                }
+
+                return {
+                    label: `Thread ${i}`,
+                    data: threadData,
+                    borderColor: getColor(i),
+                    fill: false,
+                    pointRadius: 0,
+                    borderWidth: 1
+                };
+            });
+
+            myChart = new Chart(ctx, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            position: 'bottom',
+                            title: {
+                                display: true,
+                                text: 'Elapsed Time (seconds)'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: showDelta ? `${metric} (Change)` : metric
+                            }
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                title: function(context) {
+                                    return `Time: ${context[0].parsed.x.toFixed(2)} s`;
+                                },
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed.y !== null) {
+                                        label += showDelta ? 
+                                            `Change: ${context.parsed.y.toFixed(2)}` :
+                                            context.parsed.y.toFixed(2);
+                                    }
+                                    return label;
+                                }
+                            }
+                        },
+                        legend: {
+                            position: 'top',
+                        }
+                    },
+                    hover: {
+                        mode: 'nearest',
+                        intersect: true
+                    }
+                }
+            });
+        }
+
+        function getColor(index) {
+            const colors = ['#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#a4de6c', '#d0ed57', '#ffc658', '#8dd1e1'];
+            return colors[index % colors.length];
+        }
+
+        // Resize chart when window size changes
+        window.addEventListener('resize', function() {
+            if (myChart) {
+                myChart.resize();
+            }
+        });
+    </script>
+</body>
+</html>
